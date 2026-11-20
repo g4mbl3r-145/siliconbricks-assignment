@@ -1,6 +1,11 @@
 # Plan: General Machines generalist assignment
 
-Status on 19 Nov 2026: **not started, no clock running.** The full brief is hidden until `start_assignment` is called.
+Status on 20 Nov 2026, ~03:00 IST: **clock running. Started 20 Nov 00:52:57 IST; deadline 22 Nov 00:52:57 IST.** Brief in [BRIEF.md](BRIEF.md). Task: Bangkok plot feasibility tool, one zone (chosen: ย.10). Rules and sources in [references/BANGKOK.md](references/BANGKOK.md); calls in [DECISIONS.md](DECISIONS.md). Working plan: `C:\Users\amana\.claude\plans\plan-everything-and-start-quirky-forest.md`.
+
+Done: steps 1–4 of the working plan (research, map + plot drawing, allowed-space engine with 15 tests, 3 designs with checklists and area statement, analysis in a Web Worker). Live at https://siliconbricks-assignment.vercel.app.
+Next: try-to-break pass (step 6), live Overpass outside the snapshot, README, polish, first submission by Sat 21 Nov 18:00 IST.
+
+The sections below are the pre-clock plan, kept for the record.
 
 ## 1. What is known
 

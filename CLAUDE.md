@@ -44,6 +44,9 @@ Call `time_left` at the start of every session and before submitting.
 
 ## Prepared before the clock
 
+- Repo: `https://github.com/g4mbl3r-145/siliconbricks-assignment` (private; make public before submitting). The candidate commits and pushes.
+- Live: `https://siliconbricks-assignment.vercel.app` (Vercel project `gambler8/siliconbricks-assignment`, deployed from `starter/` with `vercel --prod`). Submit only this alias: the per-deployment `*-gambler8.vercel.app` URLs need a Vercel login and the submission server rejects them.
+
 - `starter/`: working Vite + React + TS app (plot, setbacks, massing options, rule checks, 2D plan, 3D view with sun shadows, PDF/image underlay, DXF parsing, share link). 9 unit tests. See `starter/README.md`. Reuse what fits the brief; drop the rest.
 - `references/BYELAWS.md`: MBBL 2016 and RERA numbers with section and PDF page (PDF page = printed page + 18). `references/SOURCES.md` has URLs and hashes. MBBL is a model; local rules override it.
 - Environment: activate `.venv` first. It holds Python, `pnpm`, `vercel`, `gh` and Playwright with Chromium (use it for screenshots and browser checks).
