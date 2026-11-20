@@ -47,6 +47,7 @@ export interface Design {
   far: number
   footprint: Poly[]
   checks: Check[]
+  limitedBy: string
   error?: string
 }
 
@@ -94,6 +95,15 @@ const longestDir = (p: Poly): Pt => {
   return [(b[0] - a[0]) / ls[i], (b[1] - a[1]) / ls[i]]
 }
 
+/** Width of the rectangle with the same area and perimeter: exact for slabs and squares, conservative for jagged shapes. */
+export const plateWidth = (p: Poly) => {
+  const A = area(p)
+  const h = edgeLengths(p).reduce((a, b) => a + b, 0) / 2
+  const d = h * h - 4 * A
+  return d > 0 ? (h - Math.sqrt(d)) / 2 : Math.sqrt(A)
+}
+const buildable = (p: Poly, minW: number) => plateWidth(p) >= minW
+
 type Mode = 'tower' | 'twin' | 'slab' | 'blocks'
 
 const META: Record<Mode, [string, string]> = {
@@ -112,7 +122,7 @@ const stack = (ctx: Ctx, env: Envelope, mode: Mode, p: number, cover: number, ma
   const floors: Floor[] = []
   let g = 0
   const push = (i: number, polys: Poly[], use: FloorUse) => {
-    const ps = polys.filter(x => x.length > 2 && area(x) >= MIN_LEVEL_M2)
+    const ps = polys.filter(x => x.length > 2 && area(x) >= MIN_LEVEL_M2 && buildable(x, ctx.a.minWidth))
     if (!ps.length) return false
     let a = areaAll(ps)
     if (g + a > maxGfa + EPS) {
@@ -135,7 +145,11 @@ const stack = (ctx: Ctx, env: Envelope, mode: Mode, p: number, cover: number, ma
   const region = clip(podium, L[podLevels].poly)
   const dir = longestDir(region.length ? region : podium)
   let plates: Poly[] = twin ? split(region, dir, FIRE_ACCESS_M) : [region]
-  if (towers) plates = plates.map(x => fit(x, twin ? ctx.a.plate * 0.6 : ctx.a.plate)).filter(x => x.length)
+  if (towers) {
+    // plate grows on large plots so the tower stays within maxStoreys
+    const target = Math.max(ctx.a.plate, (maxGfa - g) / Math.max(1, ctx.a.maxStoreys)) * (twin ? 0.6 : 1)
+    plates = plates.map(x => fit(x, Number.isFinite(target) ? target : ctx.a.plate)).filter(x => x.length && buildable(x, ctx.a.minWidth))
+  }
   if (!plates.length) return floors
   for (let i = podLevels; i < L.length; i++) {
     const use: FloorUse = !towers && i <= p ? 'parking' : 'main'
@@ -151,7 +165,10 @@ const evalDesign = (ctx: Ctx, r: Omit<Result, 'designs'>, env: Envelope, mode: M
   const spec = USES[use]
   const plotA = r.plotArea
   const reqOpenExtra = a.bonusOpen
-  const capG = !r.access && ctx.f.access ? Math.min(r.maxGfa, XL_M2 - 1) : r.maxGfa
+  // MR 33 ข้อ 2: without a 10 m road stay under 10,000 m²; without an 18 m road stay under 30,000 m²
+  const capG = !ctx.f.access ? r.maxGfa
+    : !r.access ? Math.min(r.maxGfa, XL_M2 - 1)
+    : ctx.site.width < ACCESS_ROAD_XXL_M ? Math.min(r.maxGfa, XXL_M2 - 1) : r.maxGfa
   let cover = Math.max(0, (plotA - reqOpenExtra) / (ctx.f.open ? 1 + spec.openShare : 1))
   let best: Floor[] = []
   const enough = (fl: Floor[]) => {
@@ -183,7 +200,7 @@ const evalDesign = (ctx: Ctx, r: Omit<Result, 'designs'>, env: Envelope, mode: M
     if (plotA - coverNow >= need - EPS) break
     cover = Math.max(0, plotA - need) * 0.995
   }
-  return finish(ctx, r, env, mode, best)
+  return finish(ctx, r, env, mode, best, capG)
 }
 
 const spacesRequired = (ctx: Ctx, main: number) => {
@@ -192,7 +209,7 @@ const spacesRequired = (ctx: Ctx, main: number) => {
   return Math.max(ctx.a.unitSize >= PARKING_UNIT_M2 ? units : 0, Math.ceil(main / PARKING_M2_PER_SPACE))
 }
 
-const finish = (ctx: Ctx, r: Omit<Result, 'designs'>, env: Envelope, mode: Mode, floors: Floor[]): Design => {
+const finish = (ctx: Ctx, r: Omit<Result, 'designs'>, env: Envelope, mode: Mode, floors: Floor[], capG: number): Design => {
   const { site, a, use, zone } = ctx
   const spec = USES[use]
   const [name, blurb] = META[mode]
@@ -222,7 +239,7 @@ const finish = (ctx: Ctx, r: Omit<Result, 'designs'>, env: Envelope, mode: Mode,
   const add = (c: Check) => checks.push(c)
 
   if (!floors.length) {
-    return { key: mode, name, blurb, regime: env.regime, floors, gfa: 0, mainArea: 0, parkingArea: 0, net: 0, units: 0, spacesReq: 0, spacesProv: 0, height: 0, cover: 0, open: plotA, far: 0, footprint: [], checks, error: 'Nothing fits: the allowed space is too small for this design.' }
+    return { key: mode, name, blurb, regime: env.regime, floors, gfa: 0, mainArea: 0, parkingArea: 0, net: 0, units: 0, spacesReq: 0, spacesProv: 0, height: 0, cover: 0, open: plotA, far: 0, footprint: [], checks, limitedBy: '', error: 'Nothing fits: the allowed space is too small for this design.' }
   }
 
   add({ id: 'far', name: 'Floor area ratio (FAR)', value: f2(gfa / plotA), limit: `≤ ${f2(r.farEff)}`, status: ok(gfa / plotA <= r.farEff + EPS), ref: zoneRef(zone, `FAR ${zone.far}:1`), note: r.farEff > r.farBase ? `Includes +${f2(r.farEff - r.farBase)} bonus (ข้อ 53).` : undefined })
@@ -280,7 +297,15 @@ const finish = (ctx: Ctx, r: Omit<Result, 'designs'>, env: Envelope, mode: Mode,
     add({ id: 'eia', name: 'Environmental impact assessment', value: `${f0(units)} units, ${f0(gfa)} m²`, limit: `< ${EIA_UNITS} units and < ${f0(EIA_M2)} m²`, status: eia ? 'check' : 'pass', ref: REF.eia, note: eia ? 'EIA report must be approved before construction.' : undefined })
   }
 
-  return { key: mode, name, blurb, regime: env.regime, floors, gfa, mainArea, parkingArea, net, units, spacesReq, spacesProv, height, cover, open, far: gfa / plotA, footprint, checks }
+  return { key: mode, name, blurb, regime: env.regime, floors, gfa, mainArea, parkingArea, net, units, spacesReq, spacesProv, height, cover, open, far: gfa / plotA, footprint, checks, limitedBy: limit(r, env, gfa, capG, floors) }
+}
+
+const limit = (r: Omit<Result, 'designs'>, env: Envelope, gfa: number, capG: number, floors: Floor[]) => {
+  if (gfa >= r.maxGfa - 1) return 'Reaches the FAR limit.'
+  if (capG < r.maxGfa && gfa >= capG - 1)
+    return capG < XL_M2 ? 'Capped below 10,000 m²: the road is under 10 m or the frontage under 12 m (MR 33 ข้อ 2).' : 'Capped below 30,000 m²: the road is under 18 m (MR 33 ข้อ 2).'
+  if (env.regime === 'low') return 'Kept under 23 m so high-rise rules do not apply; the low-rise allowed space is full.'
+  return `Stops at ${floors.length} floors: above that the height-vs-road plane, setbacks and minimum floor width leave no buildable plate.`
 }
 
 export const analyse = (ctx: Ctx): Result => {

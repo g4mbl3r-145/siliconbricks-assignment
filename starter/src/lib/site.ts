@@ -17,7 +17,8 @@ const LEVEL_M = 3.2 // assumption: storey height for OSM building:levels
 /** Height of a context building and how it was obtained. Estimates are labelled in the UI. */
 export const buildingHeight = (b: RawBuilding, footprintM2: number): [number, HeightBasis] => {
   const h = num(b.h)
-  if (h) return [h, 'osm-height']
+  // OpenMapTiles render_height falls back to 5 m when OSM has no height or levels: treat that as unknown
+  if (h && !(b.t === 'tiles' && h <= 5)) return [h, b.t === 'tiles' ? 'osm-levels' : 'osm-height']
   const l = num(b.l)
   if (l) return [l * LEVEL_M, 'osm-levels']
   if (b.t === 'house' || b.t === 'terrace' || b.t === 'detached') return [7, 'estimated']
@@ -135,30 +136,59 @@ export const fetchZone = async ([lng, lat]: LL): Promise<Zone | null> => {
 const OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://overpass.private.coffee/api/interpreter', 'https://maps.mail.ru/osm/tools/overpass/api/interpreter']
 
 /** Live OSM context around a point (used outside the bundled snapshot). */
-export const fetchContext = async ([lng, lat]: LL, r = 0.004): Promise<Context> => {
-  const [s, w, n, e] = [lat - r, lng - r, lat + r, lng + r].map(v => v.toFixed(5))
-  const q = `[out:json][timeout:60];(way["building"](${s},${w},${n},${e});way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|service|living_street)$"](${s},${w},${n},${e});node["railway"="station"](${lat - 0.01},${lng - 0.01},${lat + 0.01},${lng + 0.01}););out tags geom;`
-  let err: unknown
-  for (const url of OVERPASS) {
-    try {
-      const res = await fetch(url, { method: 'POST', body: new URLSearchParams({ data: q }) })
-      if (!res.ok) throw new Error(`${res.status}`)
-      const d = await res.json()
-      const ctx: Context = { bbox: [+w, +s, +e, +n], source: 'OpenStreetMap contributors via Overpass API (ODbL)', fetched: d.osm3s?.timestamp_osm_base ?? '', buildings: [], roads: [], stations: [] }
-      for (const el of d.elements) {
-        const t = el.tags ?? {}
-        if (el.type === 'node') { ctx.stations.push({ name: t['name:en'] ?? t.name ?? 'station', c: [el.lon, el.lat] }); continue }
-        const g: LL[] = el.geometry.map((p: { lon: number; lat: number }) => [p.lon, p.lat])
-        if (t.building) ctx.buildings.push({ id: el.id, g, h: t.height, l: t['building:levels'], t: t.building, n: t['name:en'] ?? t.name })
-        else ctx.roads.push({ id: el.id, g, k: t.highway, w: t.width, ln: t.lanes, n: t['name:en'] ?? t.name })
-      }
-      return ctx
-    } catch (e) { err = e }
+const parse = (d: { osm3s?: { timestamp_osm_base?: string }; elements: { type: string; id: number; tags?: Record<string, string>; lon: number; lat: number; geometry: { lon: number; lat: number }[] }[] }, bbox: Context['bbox']): Context => {
+  const ctx: Context = { bbox, source: 'OpenStreetMap contributors via Overpass API (ODbL)', fetched: d.osm3s?.timestamp_osm_base ?? '', buildings: [], roads: [], stations: [] }
+  for (const el of d.elements) {
+    const t = el.tags ?? {}
+    if (el.type === 'node') { ctx.stations.push({ name: t['name:en'] ?? t.name ?? 'station', c: [el.lon, el.lat] }); continue }
+    const g: LL[] = el.geometry.map(p => [p.lon, p.lat])
+    if (t.building) ctx.buildings.push({ id: el.id, g, h: t.height, l: t['building:levels'], t: t.building, n: t['name:en'] ?? t.name })
+    else ctx.roads.push({ id: el.id, g, k: t.highway, w: t.width, ln: t.lanes, n: t['name:en'] ?? t.name })
   }
-  throw err
+  return ctx
 }
 
-export const covers = (ctx: Context | null, at: LL) => !!ctx && inBox(at, [ctx.bbox[0] + 0.002, ctx.bbox[1] + 0.002, ctx.bbox[2] - 0.002, ctx.bbox[3] - 0.002])
+/** Live OSM context around a point (used outside the bundled snapshot). Mirrors are raced; the first good answer wins. */
+export const fetchContext = async ([lng, lat]: LL, r = 0.0035, timeoutMs = 45_000): Promise<Context> => {
+  const [s, w, n, e] = [lat - r, lng - r, lat + r, lng + r].map(v => v.toFixed(5))
+  const q = `[out:json][timeout:40];(way["building"](${s},${w},${n},${e});way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|service|living_street)$"](${s},${w},${n},${e});node["railway"="station"](${(lat - 0.01).toFixed(5)},${(lng - 0.01).toFixed(5)},${(lat + 0.01).toFixed(5)},${(lng + 0.01).toFixed(5)}););out tags geom;`
+  const ctl = new AbortController()
+  const timer = setTimeout(() => ctl.abort(), timeoutMs)
+  try {
+    const d = await Promise.any(OVERPASS.map(async url => {
+      const res = await fetch(url, { method: 'POST', body: new URLSearchParams({ data: q }), signal: ctl.signal })
+      if (!res.ok) throw new Error(`${url} ${res.status}`)
+      return res.json()
+    }))
+    return parse(d, [+w, +s, +e, +n])
+  } finally {
+    clearTimeout(timer)
+    ctl.abort()
+  }
+}
+
+type TileFeature = { geometry: GeoJSON.Geometry; properties: Record<string, unknown> }
+const TILE_ROAD: Record<string, string> = { minor: 'residential', service: 'service', motorway: 'motorway', trunk: 'trunk', primary: 'primary', secondary: 'secondary', tertiary: 'tertiary' }
+
+/** Context from the OpenMapTiles vector tiles already loaded for the basemap (OSM data, CDN-served, always available). */
+export const tilesContext = (bbox: Context['bbox'], buildings: TileFeature[], roads: TileFeature[], pois: TileFeature[]): Context => {
+  const polys = (g: GeoJSON.Geometry): LL[][] => (g.type === 'Polygon' ? [g.coordinates[0] as LL[]] : g.type === 'MultiPolygon' ? g.coordinates.map(p => p[0] as LL[]) : [])
+  const lines = (g: GeoJSON.Geometry): LL[][] => (g.type === 'LineString' ? [g.coordinates as LL[]] : g.type === 'MultiLineString' ? (g.coordinates as LL[][]) : [])
+  let id = -1
+  return {
+    bbox,
+    source: 'OpenStreetMap contributors via OpenMapTiles vector tiles (OpenFreeMap)',
+    fetched: '',
+    buildings: buildings.flatMap(f => (f.properties.hide_3d ? [] : polys(f.geometry).filter(r => r.length > 3).map(g => ({ id: id--, g, h: String(f.properties.render_height ?? ''), t: 'tiles' })))),
+    roads: roads.flatMap(f => {
+      const k = TILE_ROAD[String(f.properties.class)]
+      return k ? lines(f.geometry).filter(g => g.length > 1).map(g => ({ id: id--, g, k, n: (f.properties['name:en'] ?? f.properties.name) as string | undefined })) : []
+    }),
+    stations: pois.filter(f => f.properties.class === 'railway' && f.geometry.type === 'Point').map(f => ({ name: String(f.properties['name:en'] ?? f.properties.name ?? 'station'), c: (f.geometry as GeoJSON.Point).coordinates as LL })),
+  }
+}
+
+export const covers = (ctx: Context | null, at: LL) => !!ctx && inBox(at, [ctx.bbox[0] + 0.0015, ctx.bbox[1] + 0.0015, ctx.bbox[2] - 0.0015, ctx.bbox[3] - 0.0015])
 
 /** Thai land units: 1 rai = 4 ngan = 400 sq wah = 1,600 m². */
 export const rai = (m2: number) => {

@@ -120,13 +120,15 @@ export interface Assumptions {
   unitSize: number
   parkingSpace: number
   plate: number
+  minWidth: number
+  maxStoreys: number
   bonusOpen: number
 }
 
 export const ASSUME_DEFAULT: Record<Use, Assumptions> = {
-  condo: { groundH: 4.5, floorH: 3.0, roof: 2.0, efficiency: 0.75, unitSize: 35, parkingSpace: 30, plate: 900, bonusOpen: 0 },
-  hotel: { groundH: 5.0, floorH: 3.2, roof: 2.0, efficiency: 0.65, unitSize: 32, parkingSpace: 30, plate: 900, bonusOpen: 0 },
-  office: { groundH: 5.0, floorH: 4.0, roof: 2.0, efficiency: 0.8, unitSize: 0, parkingSpace: 30, plate: 1200, bonusOpen: 0 },
+  condo: { groundH: 4.5, floorH: 3.0, roof: 2.0, efficiency: 0.75, unitSize: 35, parkingSpace: 30, plate: 900, minWidth: 8, maxStoreys: 40, bonusOpen: 0 },
+  hotel: { groundH: 5.0, floorH: 3.2, roof: 2.0, efficiency: 0.65, unitSize: 32, parkingSpace: 30, plate: 900, minWidth: 8, maxStoreys: 40, bonusOpen: 0 },
+  office: { groundH: 5.0, floorH: 4.0, roof: 2.0, efficiency: 0.8, unitSize: 0, parkingSpace: 30, plate: 1200, minWidth: 8, maxStoreys: 40, bonusOpen: 0 },
 }
 
 export const ASSUME_LABEL: Record<keyof Assumptions, [string, string]> = {
@@ -136,7 +138,9 @@ export const ASSUME_LABEL: Record<keyof Assumptions, [string, string]> = {
   efficiency: ['Net-to-gross efficiency', ''],
   unitSize: ['Average unit / room (net)', 'm²'],
   parkingSpace: ['Gross area per parking space incl. aisle', 'm²'],
-  plate: ['Tower floor plate target', 'm²'],
+  plate: ['Tower floor plate target (minimum)', 'm²'],
+  minWidth: ['Minimum buildable floor width', 'm'],
+  maxStoreys: ['Tower storeys before the plate grows', ''],
   bonusOpen: ['Public open space offered (FAR bonus)', 'm²'],
 }
 

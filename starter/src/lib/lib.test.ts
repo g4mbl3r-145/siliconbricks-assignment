@@ -132,3 +132,21 @@ describe('kml', async () => {
     expect(() => parseKml('<kml><Placemark><Point><coordinates>100,13,0</coordinates></Point></Placemark></kml>')).toThrow()
   })
 })
+
+describe('buildability', async () => {
+  const { plateWidth } = await import('./designs')
+  it('plate width is exact for a slab and a square', () => {
+    expect(plateWidth(rect(40, 6))).toBeCloseTo(6, 6)
+    expect(plateWidth(rect(12, 12))).toBeCloseTo(12, 6)
+  })
+  it('a 15 m wide deep plot cannot carry a high-rise (6 m sides leave 3 m)', () => {
+    const r = analyse(ctx({ plot: rect(15, 120), road: [true, false, false, false], width: 12 }))
+    for (const d of r.designs) expect(d.height).toBeLessThan(23)
+  })
+  it('frontage along a curved road is the continuous run', async () => {
+    const { frontage } = await import('./envelope')
+    const n = 60, R = 40
+    const plot: Poly = Array.from({ length: n }, (_, i) => [R * Math.cos((2 * Math.PI * i) / n), R * Math.sin((2 * Math.PI * i) / n)])
+    expect(frontage({ plot, road: plot.map((_, i) => i < 10), width: 12 })).toBeGreaterThan(40)
+  })
+})

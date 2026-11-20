@@ -6,6 +6,7 @@ import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url'
 
 maplibregl.setWorkerUrl(workerUrl)
 import type { LL } from '../lib/project'
+import { tilesContext, type Context } from '../lib/site'
 
 type FC = GeoJSON.FeatureCollection
 
@@ -29,6 +30,8 @@ interface Props {
   onPlot: (pts: LL[], kind: 'move' | 'insert' | 'delete' | 'new', at?: number) => void
   onEdge: (i: number) => void
   onDrawEnd: () => void
+  tilesFor: string // non-empty key: read context from loaded vector tiles once the map is idle
+  onTiles: (ctx: Context) => void
 }
 
 const STYLE = 'https://tiles.openfreemap.org/styles/liberty'
@@ -38,7 +41,7 @@ const ring = (p: LL[]) => [...p, p[0]]
 
 const USE_COLOR = ['match', ['get', 'use'], 'lobby', '#94a3b8', 'parking', '#64748b', '#f8fafc'] as unknown as maplibregl.ExpressionSpecification
 
-export default function MapView({ data, show, level, drawing, focus, onPlot, onEdge, onDrawEnd }: Props) {
+export default function MapView({ data, show, level, drawing, focus, onPlot, onEdge, onDrawEnd, tilesFor, onTiles }: Props) {
   const el = useRef<HTMLDivElement>(null)
   const map = useRef<maplibregl.Map | null>(null)
   const ready = useRef(false)
@@ -236,6 +239,24 @@ export default function MapView({ data, show, level, drawing, focus, onPlot, onE
     const xs = p.map(v => v[0]), ys = p.map(v => v[1])
     m.fitBounds([[Math.min(...xs), Math.min(...ys)], [Math.max(...xs), Math.max(...ys)]], { padding: 160, pitch: 58, bearing: m.getBearing(), maxZoom: 18, duration: 900 })
   }, [focus])
+
+  const onTilesRef = useRef(onTiles)
+  onTilesRef.current = onTiles
+  useEffect(() => {
+    const m = map.current
+    if (!m || !tilesFor) return
+    let done = false
+    const read = () => {
+      if (done || !ready.current || !m.isSourceLoaded('openmaptiles')) return
+      done = true
+      const b = m.getBounds()
+      const q = (sourceLayer: string) => m.querySourceFeatures('openmaptiles', { sourceLayer }) as unknown as Parameters<typeof tilesContext>[1]
+      onTilesRef.current(tilesContext([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()], q('building'), q('transportation'), q('poi')))
+    }
+    const t = setTimeout(read, 1500)
+    m.on('idle', read)
+    return () => { clearTimeout(t); m.off('idle', read) }
+  }, [tilesFor])
 
   return <div ref={el} className="map" />
 }

@@ -39,7 +39,8 @@ const SAMPLE: State = {
 const load = (): State => {
   try {
     const s = { ...SAMPLE, ...JSON.parse(decodeURIComponent(atob(location.hash.slice(1)))) } as State
-    return s.pts.length >= 3 && s.road.length === s.pts.length ? s : SAMPLE
+    if (!(s.pts.length >= 3 && s.road.length === s.pts.length && s.use in USES)) return SAMPLE
+    return { ...s, a: { ...ASSUME_DEFAULT[s.use], ...s.a }, f: { ...FLAGS_ON, ...s.f } }
   } catch {
     return SAMPLE
   }
@@ -138,16 +139,30 @@ export default function App() {
   const inSnap = covers(snapshot, centre)
   const ctx = inSnap ? snapshot : live.ctx
 
+  // Outside the bundled snapshot: read buildings and roads from the basemap's vector tiles at once,
+  // then try Overpass (richer tags) in the background and swap it in if it answers.
+  const key = `${centre[0].toFixed(3)},${centre[1].toFixed(3)}`
+  const needLive = !!snapshot && !inSnap && !(live.ctx && covers(live.ctx, centre))
+  const [tilesFor, setTilesFor] = useState('')
   useEffect(() => {
-    if (!snapshot || inSnap) return
-    if (live.ctx && covers(live.ctx, centre)) return
-    setLive(l => ({ ...l, status: 'Loading surrounding buildings from OpenStreetMap…' }))
+    if (!needLive) return
+    setLive(l => ({ ...l, status: 'Reading surrounding buildings from the map tiles…' }))
+    setTilesFor(key)
+    const ctl = { stop: false }
     const t = setTimeout(() => {
-      fetchContext(centre).then(c => setLive({ ctx: c, status: '' })).catch(() => setLive({ ctx: null, status: 'Could not load surrounding buildings (Overpass API busy). Retry by nudging the plot.' }))
-    }, 500)
-    return () => clearTimeout(t)
+      fetchContext(centre).then(c => { if (!ctl.stop) setLive({ ctx: c, status: '' }) }).catch(() => setLive(l => ({ ...l, status: '' })))
+    }, 800)
+    return () => { ctl.stop = true; clearTimeout(t) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [snapshot, inSnap, centre[0].toFixed(3), centre[1].toFixed(3)])
+  }, [needLive, key])
+  const onTiles = (c: Context) => setLive(l => (l.ctx && l.ctx.source.includes('Overpass') && covers(l.ctx, centre) ? l : { ctx: c, status: '' }))
+
+  useEffect(() => {
+    if (!live.ctx || !s.widthBasis.startsWith('no mapped road')) return
+    const g = detectRoad(live.ctx, s.pts)
+    if (!g.basis.startsWith('no mapped road')) setS(o => ({ ...o, road: g.road, width: g.width, widthBasis: g.basis, roadName: g.name }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live.ctx])
 
   const bundledZone = useMemo(() => zoneAt(zonesFC, centre), [zonesFC, centre])
   const zKey = `${centre[0].toFixed(4)},${centre[1].toFixed(4)}`
@@ -339,7 +354,7 @@ export default function App() {
 
       <main className="center">
         <MapView data={mapData} show={show} level={level} drawing={drawing} focus={focus}
-          onPlot={onPlotChange} onEdge={i => set({ road: s.road.map((v, j) => (j === i ? !v : v)) })} onDrawEnd={() => setDrawing(false)} />
+          onPlot={onPlotChange} onEdge={i => set({ road: s.road.map((v, j) => (j === i ? !v : v)) })} onDrawEnd={() => setDrawing(false)} tilesFor={tilesFor} onTiles={onTiles} />
         {!model.ok && <div className="banner">{model.why}</div>}
         {live.status && <div className="banner info">{live.status}</div>}
         <div className="overlay toggles">
@@ -396,6 +411,7 @@ export default function App() {
             {design && !design.error && (
               <>
                 <p className="muted">{design.blurb}</p>
+                <p className="limit"><b>FAR {n2(design.far)} of {n2(M.r.farEff)}.</b> {design.limitedBy}</p>
                 <div className="tabs">
                   <button className={tab === 'checks' ? 'on' : ''} onClick={() => setTab('checks')}>Rule checklist</button>
                   <button className={tab === 'areas' ? 'on' : ''} onClick={() => setTab('areas')}>Area statement</button>

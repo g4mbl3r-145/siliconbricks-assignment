@@ -100,3 +100,4 @@ footer { margin-top: 16px; font-size: 11px; }
 .filebtn { display: inline-flex; align-items: center; margin: 0; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); font-size: 13px; cursor: pointer; }
 .filebtn:hover { border-color: #94a3b8; }
 .filebtn input { display: none; }
+.limit { font-size: 12px; background: #f1f5f9; border-radius: 6px; padding: 6px 8px; margin: 6px 0; }

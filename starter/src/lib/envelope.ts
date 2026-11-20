@@ -27,8 +27,18 @@ export interface Envelope {
 export const MIN_LEVEL_M2 = 30
 const MAX_LEVELS = 120
 
-/** Longest single road-facing edge (m). */
-export const frontage = (s: Site) => Math.max(0, ...edgeLengths(s.plot).filter((_, i) => s.road[i]))
+/** Longest continuous run of road-facing edges (m); a curved road counts as one frontage. */
+export const frontage = (s: Site) => {
+  const ls = edgeLengths(s.plot)
+  const n = ls.length
+  if (s.road.every(Boolean)) return ls.reduce((a, b) => a + b, 0)
+  let best = 0, run = 0
+  for (let k = 0; k < 2 * n; k++) {
+    run = s.road[k % n] ? run + ls[k % n] : 0
+    best = Math.max(best, run)
+  }
+  return best
+}
 
 export const accessOk = (s: Site) => s.road.some(Boolean) && s.width >= ACCESS_ROAD_M && frontage(s) >= FRONTAGE_M
 
